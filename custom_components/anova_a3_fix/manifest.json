@@ -1,12 +1,11 @@
 {
   "domain": "anova_a3_fix",
   "name": "Anova A3 Delta Update Fix",
-  "version": "0.1.0",
+  "version": "0.0.3",
   "config_flow": true,
   "documentation": "https://github.com/dancmorgan/anova-ha",
   "issue_tracker": "https://github.com/dancmorgan/anova-ha/issues",
-  "dependencies": ["anova"],
-  "requirements": [],
+  "requirements": ["anova_wifi@git+https://github.com/dancmorgan/anova_wifi.git@main"],
   "codeowners": ["@dancmorgan"],
   "iot_class": "local_push"
 }
