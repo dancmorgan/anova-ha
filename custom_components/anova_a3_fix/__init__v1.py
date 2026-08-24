@@ -1,41 +1,33 @@
-"""v2 variant - patches anova-wifi>=2.0.0's A3 EVENT_APC_STATE parsing.
+"""Patches a crash in the anova-wifi library's A3 EVENT_APC_STATE parsing.
 
-NOT ACTIVE. This is a reference implementation for when Home Assistant's
-core `anova` integration bumps its anova-wifi pin to 2.x. To use it, replace
-__init__.py with this file's contents (and update manifest.json's
-`requirements` if this component needs to pin its own anova-wifi version).
+Home Assistant's built-in Anova integration pins anova-wifi==1.0.1. That
+version's build_a3_payload() has two bugs that are fatal for an A3/A2
+cooker's very first (or an early) websocket message:
 
-Checked against the real v2.0.0 source
-(https://github.com/Lash-L/anova_wifi/blob/v2.0.0/src/anova_wifi/web_socket_containers.py
-and .../websocket_handler.py). Both bugs from v1.0.1 are still present in
-2.0.0, unchanged in substance:
+1. When the cooker is idle, the device sends `currentJob.jobStage: null`.
+   `AnovaA3State(None)` raises ValueError (no `_missing_` fallback), which
+   happens on literally the first EVENT_APC_STATE message an idle device
+   ever sends - so the coordinator's first update never arrives and no
+   entities are ever created.
 
-1. build_a3_payload() now guards `currentJob is None`, but not
-   `currentJob["jobStage"] is None`. A real A3 sends `currentJob` as a
-   present dict with `jobStage: null` while idle, so
-   `AnovaA3State(job_stage)` still raises ValueError on that value - same
-   crash as before, just past a newly-added but insufficient guard.
+2. After the initial full state snapshot, the device sends partial delta
+   updates that omit unchanged top-level keys (e.g. `timerInSeconds`,
+   `currentJob`). build_a3_payload() indexes those keys directly
+   (`apc_response["timerInSeconds"]`), so the first delta update raises
+   KeyError.
 
-2. build_a3_payload() still indexes apc_response directly
-   (`apc_response["timerInSeconds"]`, etc.) with no fallback, so a delta
-   update that omits an unchanged top-level key still raises KeyError.
+Either exception propagates out of AnovaWebsocketHandler.on_message(),
+which is called from an unguarded `async for msg in self.ws:` loop in
+message_listener() - so it permanently kills that background task. No
+error surfaces in the `anova` or `anova_wifi` loggers because it's an
+orphaned asyncio task exception.
 
-Both exceptions still propagate out of AnovaWebsocketHandler.on_message(),
-called from an unguarded `async for msg in self.ws:` loop in
-message_listener() - same silent failure mode as v1.0.1.
-
-v2.0.0 also changed two things this patch has to account for that v1.0.1
-didn't have:
-
-- APCWifiDevice's constructor gained a required `send_command` argument.
-  The real on_message passes `send_command=self.send_command` when creating
-  a device from EVENT_APC_WIFI_LIST; this patch must do the same or device
-  creation breaks outright.
-
-- The real on_message now sets `device.last_update` and
-  `device.last_update_received_at` on every successful update. Other code
-  (e.g. availability tracking) may depend on these being kept current, so
-  this patch sets them too.
+This component monkeypatches AnovaWebsocketHandler.on_message at import
+time to: treat a missing/unrecognized job stage as "no active job", merge
+delta updates onto a cached last-known-full state per device before
+parsing, and catch parsing errors per-message (log + skip) instead of
+letting them kill the listener. It changes no HA-side integration code -
+just the library call it makes.
 
 See: https://github.com/home-assistant/core/issues/118911
      https://github.com/Lash-L/anova_wifi
@@ -44,7 +36,6 @@ See: https://github.com/home-assistant/core/issues/118911
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from anova_wifi.web_socket_containers import (
@@ -66,7 +57,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _build_a3_payload_safe(apc_response: dict[str, Any]) -> APCUpdate:
-    """Reimplementation of anova_wifi 2.0.0's build_a3_payload that tolerates
+    """Reimplementation of anova_wifi's build_a3_payload that tolerates
     a null job stage and missing keys, instead of raising."""
     firmware_version = apc_response.get("firmwareVersion")
     is_cooking = bool(apc_response.get("isCooking", False))
@@ -119,12 +110,14 @@ def _patched_on_message(self: AnovaWebsocketHandler, message: dict[str, Any]) ->
                     type=device["type"],
                     paired_at=device["pairedAt"],
                     name=device["name"],
-                    send_command=self.send_command,
                 )
     elif message["command"] == AnovaCommand.EVENT_APC_STATE:
         cooker_id = message["payload"]["cookerId"]
         device = self.devices.get(cooker_id)
         if device is None:
+            return
+        update_listener = device.update_listener
+        if update_listener is None:
             return
         state = message["payload"]["state"]
         try:
@@ -149,22 +142,23 @@ def _patched_on_message(self: AnovaWebsocketHandler, message: dict[str, Any]) ->
                 ex,
             )
             return
-        device.last_update = update
-        device.last_update_received_at = datetime.now(UTC)
-        if device.update_listener is not None:
-            device.update_listener(update)
+        update_listener(update)
 
 
 AnovaWebsocketHandler.on_message = _patched_on_message
 _LOGGER.warning(
-    "anova_a3_fix: patched AnovaWebsocketHandler.on_message (anova-wifi 2.x) "
-    "to handle A3 delta updates and null job stages"
+    "anova_a3_fix: patched AnovaWebsocketHandler.on_message to handle "
+    "A3 delta updates and null job stages"
 )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # The patch above is applied at import time, which already happened by
+    # the time this runs. Nothing left to do per-entry.
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # The monkeypatch can't be cleanly reverted; removing the entry just
+    # stops it from being re-applied on the next restart.
     return True
