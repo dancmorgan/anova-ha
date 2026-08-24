@@ -1,0 +1,10 @@
+{
+  "domain": "anova_a3_fix",
+  "name": "Anova A3 Delta Update Fix",
+  "version": "0.1.0",
+  "documentation": "https://github.com/dancmorgan/anova-ha",
+  "issue_tracker": "https://github.com/dancmorgan/anova-ha/issues",
+  "requirements": [],
+  "codeowners": [],
+  "iot_class": "local_push"
+}
