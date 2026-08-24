@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Anova A3 Delta Update Fix",
+        "description": "Patches the anova_wifi library at startup to stop it from crashing on A2/A3 cooker websocket messages (null job stage, partial delta updates). No configuration needed - just confirm to enable it. Requires the official Anova integration to also be installed."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one instance is needed."
+    }
+  }
+}

@@ -50,8 +50,8 @@ from anova_wifi.web_socket_containers import (
     build_wifi_cooker_state_body,
 )
 from anova_wifi.websocket_handler import AnovaWebsocketHandler
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -146,11 +146,19 @@ def _patched_on_message(self: AnovaWebsocketHandler, message: dict[str, Any]) ->
 
 
 AnovaWebsocketHandler.on_message = _patched_on_message
+_LOGGER.warning(
+    "anova_a3_fix: patched AnovaWebsocketHandler.on_message to handle "
+    "A3 delta updates and null job stages"
+)
 
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    _LOGGER.warning(
-        "anova_a3_fix: patched AnovaWebsocketHandler.on_message to handle "
-        "A3 delta updates and null job stages"
-    )
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # The patch above is applied at import time, which already happened by
+    # the time this runs. Nothing left to do per-entry.
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # The monkeypatch can't be cleanly reverted; removing the entry just
+    # stops it from being re-applied on the next restart.
     return True
